@@ -209,28 +209,34 @@ if run:
         "Status": out_status,
     })
 
-    # Write XLSX to memory
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        out_df.to_excel(writer, index=False, sheet_name="Outreach")
+# Write XLSX to memory (WITH real Excel checkboxes)
+buffer = BytesIO()
 
-        # Optional: set a slightly nicer column width
-        ws = writer.sheets["Outreach"]
-        for col_cells in ws.columns:
-            max_len = 0
-            col_letter = col_cells[0].column_letter
-            for c in col_cells[:50]:  # sample first 50 rows to estimate width
-                if c.value is None:
-                    continue
-                max_len = max(max_len, len(str(c.value)))
-            ws.column_dimensions[col_letter].width = min(max(12, max_len + 2), 60)
+# Use XlsxWriter (openpyxl can't reliably add form checkboxes)
+with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+    out_df.to_excel(writer, index=False, sheet_name="Outreach")
 
-    buffer.seek(0)
+    workbook  = writer.book
+    worksheet = writer.sheets["Outreach"]
 
-    st.success(f"Done. Generated {len(out_df)} rows.")
-    st.download_button(
-        label="Download outreach_output.xlsx",
-        data=buffer.getvalue(),
-        file_name="outreach_output.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    # Optional: nicer widths
+    for col_idx, col_name in enumerate(out_df.columns):
+        sample = out_df[col_name].astype(str).head(50)
+        max_len = max([len(col_name)] + [len(x) for x in sample])
+        worksheet.set_column(col_idx, col_idx, min(max(12, max_len + 2), 60))
+
+    # ---- Insert REAL checkboxes ----
+    # Pandas wrote headers on Excel row 0, data starts at row 1.
+    email_sent_col = out_df.columns.get_loc("Email Sent?")
+    chaser_sent_col = out_df.columns.get_loc("Chaser sent?")
+
+    # Make the checkbox columns a bit narrower
+    worksheet.set_column(email_sent_col, email_sent_col, 12)
+    worksheet.set_column(chaser_sent_col, chaser_sent_col, 12)
+
+    # Insert an unchecked checkbox for each data row
+    for r in range(1, len(out_df) + 1):  # 1..n (since row 0 is headers)
+        worksheet.insert_checkbox(r, email_sent_col, False)
+        worksheet.insert_checkbox(r, chaser_sent_col, False)
+
+buffer.seek(0)
