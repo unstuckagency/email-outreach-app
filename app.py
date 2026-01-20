@@ -143,6 +143,15 @@ chaser_templates = template_editor(
     help_text="Optional follow-up copy. If multiple are provided, rotates A → B → A…",
 )
 
+output_name = st.text_input(
+    "Output file name",
+    value="outreach_output.xlsx",
+    help="Must end with .xlsx"
+).strip()
+
+if not output_name.lower().endswith(".xlsx"):
+    output_name += ".xlsx"
+
 run = st.button(
     "Generate output XLSX",
     type="primary",
@@ -260,8 +269,9 @@ if run:
 
     st.success(f"Done. Generated {len(out_df)} rows.")
     st.download_button(
-        label="Download outreach_output.xlsx",
+        label="Download List",
         data=buffer.getvalue(),
-        file_name="outreach_output.xlsx",
+        file_name=output_name,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
