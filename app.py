@@ -2,6 +2,7 @@ import re
 from io import BytesIO
 import pandas as pd
 import streamlit as st
+from xlsxwriter.utility import xl_rowcol_to_cell
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([^\}]+?)\s*\}\}")
 
@@ -99,8 +100,8 @@ def template_editor(title: str, session_key: str, min_templates: int = 1, help_t
 
 # ---------------- UI ----------------
 
-st.set_page_config(page_title="Outreach Merge Tool", layout="centered")
-st.title("Outreach Merge Tool")
+st.set_page_config(page_title="reach Merge Tool", lay="centered")
+st.title("reach Merge Tool")
 
 with st.expander("Access", expanded=True):
     pw = st.text_input("Team password", type="password")
@@ -135,7 +136,7 @@ chaser_templates = template_editor(
 )
 
 run = st.button(
-    "Generate output XLSX",
+    "Generate put XLSX",
     type="primary",
     disabled=(uploaded is None or len(subject_templates) == 0 or len(email_templates) == 0)
 )
@@ -194,9 +195,9 @@ if run:
 
         out_subject.append(subject_line)
         out_email_copy.append(email_copy)
-        out_email_sent.append("☐")     # tickbox placeholder
+        out_email_sent.append("")     # tickbox placeholder
         out_chaser_copy.append(chaser_copy)
-        out_chaser_sent.append("☐")    # tickbox placeholder
+        out_chaser_sent.append("")    # tickbox placeholder
         out_status.append("")
 
     out_df = pd.DataFrame({
@@ -234,10 +235,28 @@ if run:
         worksheet.set_column(email_sent_col, email_sent_col, 12)
         worksheet.set_column(chaser_sent_col, chaser_sent_col, 12)
     
-        # Insert an unchecked checkbox for each data row
-        for r in range(1, len(out_df) + 1):  # 1..n (since row 0 is headers)
-            worksheet.insert_checkbox(r, email_sent_col, False)
-            worksheet.insert_checkbox(r, chaser_sent_col, False)
-    
+        # ---- Insert REAL checkboxes (compatible approach) ----
+        email_sent_col = out_df.columns.get_loc("Email Sent?")
+        chaser_sent_col = out_df.columns.get_loc("Chaser sent?")
+        
+        # Make checkbox columns slightly narrower
+        worksheet.set_column(email_sent_col, email_sent_col, 12)
+        worksheet.set_column(chaser_sent_col, chaser_sent_col, 12)
+        
+        # Each checkbox is a form control object. We place it inside the cell area.
+        # Rows: header at 0, data starts at 1
+        for r in range(1, len(out_df) + 1):
+            # Clear any placeholder text in the cell
+            worksheet.write_blank(r, email_sent_col, None)
+            worksheet.write_blank(r, chaser_sent_col, None)
+        
+            # Insert checkbox form controls
+            # XlsxWriter uses A1 notation for object placement
+            cell1 = xl_rowcol_to_cell(r, email_sent_col)
+            cell2 = xl_rowcol_to_cell(r, chaser_sent_col)
+        
+            worksheet.insert_form_control(cell1, {"type": "checkbox", "checked": False})
+            worksheet.insert_form_control(cell2, {"type": "checkbox", "checked": False})    
     buffer.seek(0)
+
 
