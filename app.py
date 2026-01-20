@@ -1,35 +1,39 @@
 import re
 from io import BytesIO
+
 import pandas as pd
 import streamlit as st
-from xlsxwriter.utility import xl_rowcol_to_cell
 
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([^\}]+?)\s*\}\}")
+
 
 def norm_key(s: str) -> str:
     # case-insensitive, ignore spaces + underscores
     return re.sub(r"[ _]+", "", str(s).strip().lower())
 
+
 def extract_placeholders(template: str) -> list[str]:
     return PLACEHOLDER_RE.findall(template)
 
+
 def build_header_map(df: pd.DataFrame) -> dict[str, str]:
     # {normalized_header: original_header} (first wins)
-    m = {}
+    m: dict[str, str] = {}
     for col in df.columns:
         k = norm_key(col)
         if k not in m:
             m[k] = col
     return m
 
+
 def validate_mappings(all_templates: list[str], header_map: dict[str, str]):
     # Validate placeholders across ALL templates passed in
-    all_placeholders = []
+    all_placeholders: list[str] = []
     for t in all_templates:
         all_placeholders.extend(extract_placeholders(t))
 
-    missing = []
-    mapping = {}
+    missing: list[str] = []
+    mapping: dict[str, str] = {}
     for ph in all_placeholders:
         key = norm_key(ph)
         if key in header_map:
@@ -39,13 +43,14 @@ def validate_mappings(all_templates: list[str], header_map: dict[str, str]):
 
     # de-dupe missing while preserving order
     seen = set()
-    missing_unique = []
+    missing_unique: list[str] = []
     for m in missing:
         if m not in seen:
             missing_unique.append(m)
             seen.add(m)
 
     return mapping, missing_unique
+
 
 def merge_row(template: str, row: pd.Series, mapping: dict[str, str], blank_fill: str) -> str:
     def repl(match: re.Match) -> str:
@@ -57,7 +62,9 @@ def merge_row(template: str, row: pd.Series, mapping: dict[str, str], blank_fill
         if pd.isna(val) or str(val).strip() == "":
             return blank_fill
         return str(val)
+
     return PLACEHOLDER_RE.sub(repl, template)
+
 
 def find_email_column(df: pd.DataFrame) -> str | None:
     # match any "Email" variant (case/spaces/underscores)
@@ -66,9 +73,9 @@ def find_email_column(df: pd.DataFrame) -> str | None:
             return col
     return None
 
+
 def template_editor(title: str, session_key: str, min_templates: int = 1, help_text: str | None = None):
-    """
-    Renders a dynamic list of template text areas stored in st.session_state[session_key].
+    """Renders a dynamic list of template text areas stored in st.session_state[session_key].
     Returns a list of non-empty templates (trimmed).
     """
     st.subheader(title)
@@ -87,7 +94,7 @@ def template_editor(title: str, session_key: str, min_templates: int = 1, help_t
             st.session_state[session_key].pop()
 
     for i in range(len(st.session_state[session_key])):
-        label = f"{title} {chr(65+i)}"
+        label = f"{title} {chr(65 + i)}"
         st.session_state[session_key][i] = st.text_area(
             label,
             value=st.session_state[session_key][i],
@@ -98,10 +105,11 @@ def template_editor(title: str, session_key: str, min_templates: int = 1, help_t
 
     return [t.strip() for t in st.session_state[session_key] if t.strip()]
 
+
 # ---------------- UI ----------------
 
 st.set_page_config(page_title="Outreach Merge Tool", layout="centered")
-st.title("reach Merge Tool")
+st.title("Outreach Merge Tool")
 
 with st.expander("Access", expanded=True):
     pw = st.text_input("Team password", type="password")
@@ -118,32 +126,30 @@ subject_templates = template_editor(
     "Subject template",
     session_key="subject_templates",
     min_templates=1,
-    help_text="One or more subject lines. Rotates A → B → A… across rows."
+    help_text="One or more subject lines. Rotates A → B → A… across rows.",
 )
 
 email_templates = template_editor(
     "Email copy template",
     session_key="email_templates",
     min_templates=1,
-    help_text="One or more main email bodies. Rotates A → B → A… across rows."
+    help_text="One or more main email bodies. Rotates A → B → A… across rows.",
 )
 
 chaser_templates = template_editor(
     "Chaser copy template",
     session_key="chaser_templates",
     min_templates=0,
-    help_text="Optional follow-up copy. If multiple are provided, rotates A → B → A…"
+    help_text="Optional follow-up copy. If multiple are provided, rotates A → B → A…",
 )
 
 run = st.button(
-    "Generate put XLSX",
+    "Generate output XLSX",
     type="primary",
-    disabled=(uploaded is None or len(subject_templates) == 0 or len(email_templates) == 0)
+    disabled=(uploaded is None or len(subject_templates) == 0 or len(email_templates) == 0),
 )
 
 if run:
-    logs = []
-
     # Read Excel
     try:
         df = pd.read_excel(uploaded, dtype=object)
@@ -159,21 +165,21 @@ if run:
 
     # Hard stop if any placeholder doesn't map
     if missing_placeholders:
-        st.error("Some placeholders do not match any Excel column header (case-insensitive; ignores spaces/underscores).")
-        for ph in missing_placeholders:
-            logs.append(f"UNMAPPED PLACEHOLDER: {{{{{ph}}}}}")
-        st.code("\n".join(logs))
+        st.error(
+            "Some placeholders do not match any Excel column header (case-insensitive; ignores spaces/underscores)."
+        )
+        st.code("\n".join([f"UNMAPPED PLACEHOLDER: {{{{{ph}}}}}" for ph in missing_placeholders]))
         st.stop()
 
     email_col = find_email_column(df)
 
-    out_email_address = []
-    out_subject = []
-    out_email_copy = []
-    out_email_sent = []
-    out_chaser_copy = []
-    out_chaser_sent = []
-    out_status = []
+    out_email_address: list[str] = []
+    out_subject: list[str] = []
+    out_email_copy: list[str] = []
+    out_email_sent: list[str] = []
+    out_chaser_copy: list[str] = []
+    out_chaser_sent: list[str] = []
+    out_status: list[str] = []
 
     # Generate (preserve row order)
     for i in range(len(df)):
@@ -195,69 +201,67 @@ if run:
 
         out_subject.append(subject_line)
         out_email_copy.append(email_copy)
-        out_email_sent.append("")     # tickbox placeholder
+        out_email_sent.append("")  # will become a dropdown in Excel
         out_chaser_copy.append(chaser_copy)
-        out_chaser_sent.append("")    # tickbox placeholder
+        out_chaser_sent.append("")  # will become a dropdown in Excel
         out_status.append("")
 
-    out_df = pd.DataFrame({
-        "Email address": out_email_address,
-        "Subject line": out_subject,
-        "Email Copy": out_email_copy,
-        "Email Sent?": out_email_sent,
-        "Chaser copy": out_chaser_copy,
-        "Chaser sent?": out_chaser_sent,
-        "Status": out_status,
-    })
+    out_df = pd.DataFrame(
+        {
+            "Email address": out_email_address,
+            "Subject line": out_subject,
+            "Email Copy": out_email_copy,
+            "Email Sent?": out_email_sent,
+            "Chaser copy": out_chaser_copy,
+            "Chaser sent?": out_chaser_sent,
+            "Status": out_status,
+        }
+    )
 
-    # Write XLSX to memory (WITH real Excel checkboxes)
+    # Write XLSX to memory (robust on Streamlit Cloud)
     buffer = BytesIO()
-    
-    # Use XlsxWriter (openpyxl can't reliably add form checkboxes)
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         out_df.to_excel(writer, index=False, sheet_name="Outreach")
-    
-        workbook  = writer.book
+
         worksheet = writer.sheets["Outreach"]
-    
+
         # Optional: nicer widths
         for col_idx, col_name in enumerate(out_df.columns):
             sample = out_df[col_name].astype(str).head(50)
             max_len = max([len(col_name)] + [len(x) for x in sample])
             worksheet.set_column(col_idx, col_idx, min(max(12, max_len + 2), 60))
-    
-        # ---- Insert REAL checkboxes ----
-        # Pandas wrote headers on Excel row 0, data starts at row 1.
+
+        # Excel-native "clickable" sent fields via dropdown validation (reliable)
         email_sent_col = out_df.columns.get_loc("Email Sent?")
         chaser_sent_col = out_df.columns.get_loc("Chaser sent?")
-    
-        # Make the checkbox columns a bit narrower
-        worksheet.set_column(email_sent_col, email_sent_col, 12)
-        worksheet.set_column(chaser_sent_col, chaser_sent_col, 12)
-    
-        # ---- Insert REAL checkboxes (compatible approach) ----
-        email_sent_col = out_df.columns.get_loc("Email Sent?")
-        chaser_sent_col = out_df.columns.get_loc("Chaser sent?")
-        
-        # Make checkbox columns slightly narrower
-        worksheet.set_column(email_sent_col, email_sent_col, 12)
-        worksheet.set_column(chaser_sent_col, chaser_sent_col, 12)
-        
-        # Each checkbox is a form control object. We place it inside the cell area.
-        # Rows: header at 0, data starts at 1
-        for r in range(1, len(out_df) + 1):
-            # Clear any placeholder text in the cell
-            worksheet.write_blank(r, email_sent_col, None)
-            worksheet.write_blank(r, chaser_sent_col, None)
-        
-            # Insert checkbox form controls
-            # XlsxWriter uses A1 notation for object placement
-            cell1 = xl_rowcol_to_cell(r, email_sent_col)
-            cell2 = xl_rowcol_to_cell(r, chaser_sent_col)
-        
-            worksheet.insert_form_control(cell1, {"type": "checkbox", "checked": False})
-            worksheet.insert_form_control(cell2, {"type": "checkbox", "checked": False})    
+
+        worksheet.set_column(email_sent_col, email_sent_col, 14)
+        worksheet.set_column(chaser_sent_col, chaser_sent_col, 14)
+
+        first_row = 1  # row 0 is headers
+        last_row = len(out_df)  # inclusive last row index in xlsxwriter coordinates
+
+        # Create Yes/No dropdowns
+        worksheet.data_validation(first_row, email_sent_col, last_row, email_sent_col, {
+            "validate": "list",
+            "source": ["No", "Yes"],
+        })
+        worksheet.data_validation(first_row, chaser_sent_col, last_row, chaser_sent_col, {
+            "validate": "list",
+            "source": ["No", "Yes"],
+        })
+
+        # Default all rows to "No" (so it behaves like an unchecked box)
+        for r in range(first_row, last_row + 1):
+            worksheet.write(r, email_sent_col, "No")
+            worksheet.write(r, chaser_sent_col, "No")
+
     buffer.seek(0)
 
-
-
+    st.success(f"Done. Generated {len(out_df)} rows.")
+    st.download_button(
+        label="Download outreach_output.xlsx",
+        data=buffer.getvalue(),
+        file_name="outreach_output.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
