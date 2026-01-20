@@ -21,10 +21,10 @@ def build_header_map(df: pd.DataFrame) -> dict[str, str]:
             m[k] = col
     return m
 
-def validate_mappings(templates: list[str], header_map: dict[str, str]):
-    # Validate placeholders across ALL templates
+def validate_mappings(all_templates: list[str], header_map: dict[str, str]):
+    # Validate placeholders across ALL templates passed in
     all_placeholders = []
-    for t in templates:
+    for t in all_templates:
         all_placeholders.extend(extract_placeholders(t))
 
     missing = []
@@ -51,7 +51,7 @@ def merge_row(template: str, row: pd.Series, mapping: dict[str, str], blank_fill
         raw = match.group(1)
         col = mapping.get(raw)
         if not col:
-            return ""  # should not happen if validation passed
+            return ""
         val = row.get(col, "")
         if pd.isna(val) or str(val).strip() == "":
             return blank_fill
@@ -59,18 +59,49 @@ def merge_row(template: str, row: pd.Series, mapping: dict[str, str], blank_fill
     return PLACEHOLDER_RE.sub(repl, template)
 
 def find_email_column(df: pd.DataFrame) -> str | None:
-    # preserve Email column if present (any casing/spaces/underscores)
+    # match any "Email" variant (case/spaces/underscores)
     for col in df.columns:
         if norm_key(col) == "email":
             return col
     return None
+
+def template_editor(title: str, session_key: str, min_templates: int = 1, help_text: str | None = None):
+    """
+    Renders a dynamic list of template text areas stored in st.session_state[session_key].
+    Returns a list of non-empty templates (trimmed).
+    """
+    st.subheader(title)
+    if help_text:
+        st.caption(help_text)
+
+    if session_key not in st.session_state:
+        st.session_state[session_key] = [""] * max(1, min_templates)
+
+    cols = st.columns([1, 1, 2])
+    with cols[0]:
+        if st.button(f"Add {title.lower()}", key=f"add_{session_key}"):
+            st.session_state[session_key].append("")
+    with cols[1]:
+        if st.button("Remove last", key=f"rm_{session_key}") and len(st.session_state[session_key]) > min_templates:
+            st.session_state[session_key].pop()
+
+    for i in range(len(st.session_state[session_key])):
+        label = f"{title} {chr(65+i)}"
+        st.session_state[session_key][i] = st.text_area(
+            label,
+            value=st.session_state[session_key][i],
+            height=120,
+            placeholder="Use {{placeholders}} like {{first_name}}",
+            key=f"{session_key}_{i}",
+        )
+
+    return [t.strip() for t in st.session_state[session_key] if t.strip()]
 
 # ---------------- UI ----------------
 
 st.set_page_config(page_title="Outreach Merge Tool", layout="centered")
 st.title("Outreach Merge Tool")
 
-# Simple access gate (optional but recommended)
 with st.expander("Access", expanded=True):
     pw = st.text_input("Team password", type="password")
     expected = st.secrets.get("APP_PASSWORD", "")
@@ -82,36 +113,31 @@ uploaded = st.file_uploader("Upload Excel (.xlsx)", type=["xlsx"])
 blank_fill = st.text_input("Blank cell replacement", value="[MISSING]")
 st.caption("If a cell is blank/empty, it becomes the value above (use empty string if you prefer).")
 
-st.subheader("Email templates (copy rotation)")
+subject_templates = template_editor(
+    "Subject template",
+    session_key="subject_templates",
+    min_templates=1,
+    help_text="One or more subject lines. Rotates A → B → A… across rows."
+)
 
-# Store templates in session state so the UI can add/remove dynamically
-if "templates" not in st.session_state:
-    st.session_state.templates = [""]  # start with one template
+email_templates = template_editor(
+    "Email copy template",
+    session_key="email_templates",
+    min_templates=1,
+    help_text="One or more main email bodies. Rotates A → B → A… across rows."
+)
 
-cols = st.columns([1, 1, 2])
-with cols[0]:
-    if st.button("Add template"):
-        st.session_state.templates.append("")
-with cols[1]:
-    if st.button("Remove last") and len(st.session_state.templates) > 1:
-        st.session_state.templates.pop()
-
-# Render each template input
-for i in range(len(st.session_state.templates)):
-    st.session_state.templates[i] = st.text_area(
-        f"Template {chr(65+i)}",
-        value=st.session_state.templates[i],
-        height=140,
-        placeholder="Hi {{first_name}}, ...",
-        key=f"tmpl_{i}"
-    )
-
-templates = [t for t in st.session_state.templates if t.strip()]
+chaser_templates = template_editor(
+    "Chaser copy template",
+    session_key="chaser_templates",
+    min_templates=0,
+    help_text="Optional follow-up copy. If multiple are provided, rotates A → B → A…"
+)
 
 run = st.button(
-    "Generate output CSV",
+    "Generate output XLSX",
     type="primary",
-    disabled=(uploaded is None or len(templates) == 0)
+    disabled=(uploaded is None or len(subject_templates) == 0 or len(email_templates) == 0)
 )
 
 if run:
@@ -125,11 +151,14 @@ if run:
         st.stop()
 
     header_map = build_header_map(df)
-    mapping, missing_placeholders = validate_mappings(templates, header_map)
 
-    # Hard stop if any placeholder doesn't map (requirement #5)
+    # Validate placeholders across subject + email + chaser
+    all_templates = subject_templates + email_templates + chaser_templates
+    mapping, missing_placeholders = validate_mappings(all_templates, header_map)
+
+    # Hard stop if any placeholder doesn't map
     if missing_placeholders:
-        st.error("Some placeholders do not match any Excel column (case-insensitive; ignores spaces/underscores).")
+        st.error("Some placeholders do not match any Excel column header (case-insensitive; ignores spaces/underscores).")
         for ph in missing_placeholders:
             logs.append(f"UNMAPPED PLACEHOLDER: {{{{{ph}}}}}")
         st.code("\n".join(logs))
@@ -137,32 +166,71 @@ if run:
 
     email_col = find_email_column(df)
 
-    out_email = []
-    out_copy = []
+    out_email_address = []
+    out_subject = []
+    out_email_copy = []
+    out_email_sent = []
+    out_chaser_copy = []
+    out_chaser_sent = []
+    out_status = []
 
-    # Generate (preserve row order) with rotation
+    # Generate (preserve row order)
     for i in range(len(df)):
         row = df.iloc[i]
-        tmpl = templates[i % len(templates)]  # A->B->C->... rotation
-        copy = merge_row(tmpl, row, mapping, blank_fill)
-        out_copy.append(copy)
+
+        subj_t = subject_templates[i % len(subject_templates)]
+        body_t = email_templates[i % len(email_templates)]
+        chaser_t = chaser_templates[i % len(chaser_templates)] if len(chaser_templates) > 0 else ""
+
+        subject_line = merge_row(subj_t, row, mapping, blank_fill)
+        email_copy = merge_row(body_t, row, mapping, blank_fill)
+        chaser_copy = merge_row(chaser_t, row, mapping, blank_fill) if chaser_t else ""
 
         if email_col:
             v = row.get(email_col, "")
-            out_email.append("" if pd.isna(v) else str(v))
+            out_email_address.append("" if pd.isna(v) else str(v))
+        else:
+            out_email_address.append("")
 
-    # Output: only Email (if exists) + Email Copy
-    if email_col:
-        out_df = pd.DataFrame({"Email": out_email, "Email Copy": out_copy})
-    else:
-        out_df = pd.DataFrame({"Email Copy": out_copy})
+        out_subject.append(subject_line)
+        out_email_copy.append(email_copy)
+        out_email_sent.append("☐")     # tickbox placeholder
+        out_chaser_copy.append(chaser_copy)
+        out_chaser_sent.append("☐")    # tickbox placeholder
+        out_status.append("")
 
-    csv_bytes = out_df.to_csv(index=False).encode("utf-8")
+    out_df = pd.DataFrame({
+        "Email address": out_email_address,
+        "Subject line": out_subject,
+        "Email Copy": out_email_copy,
+        "Email Sent?": out_email_sent,
+        "Chaser copy": out_chaser_copy,
+        "Chaser sent?": out_chaser_sent,
+        "Status": out_status,
+    })
 
-    st.success(f"Done. Generated {len(out_df)} rows using {len(templates)} template(s) in rotation.")
+    # Write XLSX to memory
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        out_df.to_excel(writer, index=False, sheet_name="Outreach")
+
+        # Optional: set a slightly nicer column width
+        ws = writer.sheets["Outreach"]
+        for col_cells in ws.columns:
+            max_len = 0
+            col_letter = col_cells[0].column_letter
+            for c in col_cells[:50]:  # sample first 50 rows to estimate width
+                if c.value is None:
+                    continue
+                max_len = max(max_len, len(str(c.value)))
+            ws.column_dimensions[col_letter].width = min(max(12, max_len + 2), 60)
+
+    buffer.seek(0)
+
+    st.success(f"Done. Generated {len(out_df)} rows.")
     st.download_button(
-        label="Download output.csv",
-        data=csv_bytes,
-        file_name="output.csv",
-        mime="text/csv",
+        label="Download outreach_output.xlsx",
+        data=buffer.getvalue(),
+        file_name="outreach_output.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
