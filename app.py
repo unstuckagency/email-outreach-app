@@ -100,7 +100,7 @@ def template_editor(title: str, session_key: str, min_templates: int = 1, help_t
 
 # ---------------- UI ----------------
 
-st.set_page_config(page_title="reach Merge Tool", lay="centered")
+st.set_page_config(page_title="Outreach Merge Tool", layout="centered")
 st.title("reach Merge Tool")
 
 with st.expander("Access", expanded=True):
@@ -258,5 +258,6 @@ if run:
             worksheet.insert_form_control(cell1, {"type": "checkbox", "checked": False})
             worksheet.insert_form_control(cell2, {"type": "checkbox", "checked": False})    
     buffer.seek(0)
+
 
 
